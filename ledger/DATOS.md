@@ -12,11 +12,15 @@
 
 **lineas**: pedido_id, tipo_id, descripcion, precio_acordado (centavos, copiado del sugerido y editable), nota_descuento (texto libre), fecha_entrega (AAAA-MM-DD), hora_entrega (HH:MM o null), fecha_entrega_original, estado ("pendiente" | "en_proceso" | "entregado" | "cancelado"), fecha_terminado, prioridad (boolean).
 
-**pagos**: pedido_id, linea_id (opcional), monto (centavos, siempre positivo), tipo ("cobro" | "devolucion"), metodo ("efectivo" | "qr" | "transferencia" | "otro"), fecha, nota.
+**pagos**: pedido_id, linea_id (opcional), monto (centavos, siempre positivo), tipo ("cobro" | "devolucion"), metodo ("efectivo" | "qr" | "transferencia" | "otro"), fecha, nota. El saldo del pedido se calcula como total vigente menos cobros netos; cada pago puede asociarse al pedido completo o a una línea.
+
+Al cancelar una línea, el cobro neto asignado a ella puede devolverse (se registra como pago de tipo `devolucion`) o mantenerse como saldo a favor. Los pagos asociados al pedido se asignan por fecha de entrega para determinar el monto atribuible a cada trabajo.
 
 **ubicaciones**: linea_id, tipo ("drive" | "pc" | "usb" | "correo" | "otro"), enlace_o_ruta, nota. Las rutas de PC son solo texto de referencia.
 
 **cambios**: linea_id, fecha, descripcion, costo_extra (centavos).
+
+En el detalle de cada pedido se pueden registrar varias ubicaciones y cambios por línea. Solo enlaces `http:` y `https:` se muestran como enlaces que se abren; rutas locales y otros textos son referencias sin abrir. El costo extra vacío se guarda como cero.
 
 **ajustes**: clave, valor. Claves: negocio, moneda_simbolo ("Bs"), max_niveles (4), dias_rojo, dias_amarillo, tema ("auto" | "claro" | "oscuro"), ultimo_respaldo.
 
@@ -30,6 +34,13 @@ Por cliente:
 - saldo_a_favor = max(0, cobros_netos − total_vigente).
 Los mismos cálculos existen por pedido. Los saldos nunca se guardan, siempre se calculan.
 Para mostrar la deuda por trabajo: los pagos con linea_id se aplican a esa línea; los demás se reparten entre las líneas entregadas en orden de fecha de entrega.
+
+## Estadísticas
+- Los ingresos se calculan por fecha del pago, no por fecha de entrega: cobros suman y devoluciones restan.
+- Semana significa lunes a domingo; mes y año son periodos calendario. Cada uno se compara con la semana, mes o año calendario anterior.
+- El por cobrar actual usa los saldos vigentes por pedido.
+- Los mejores clientes muestran el ingreso neto del periodo elegido.
+- Los pagos asociados a una línea se atribuyen al tipo de esa línea. Los pagos del pedido se distribuyen entre sus líneas activas en proporción a sus precios; el reparto conserva todos los centavos. Si no hay línea aplicable se agrupan como «Sin tipo».
 
 ## Reglas de entregas (en `src/logic/entregas.js`, con pruebas)
 Solo líneas pendientes o en proceso. Referencia: hoy en hora local.
@@ -45,7 +56,7 @@ Solo líneas pendientes o en proceso. Referencia: hoy en hora local.
 Se puede elegir un tipo solo si no tiene hijos activos. Si tiene hijos, la app pide elegir el siguiente nivel. Al desactivar un tipo se desactivan sus hijos. Renombrar es seguro porque las líneas apuntan al id.
 
 ## Papelera
-Borrar = eliminado:true y aviso "Eliminado. Deshacer" durante unos segundos. En la papelera se puede restaurar o borrar definitivamente (con confirmación). Si el elemento tiene trabajos asociados, avisar "esto afecta a N trabajos".
+Borrar = eliminado:true y aviso "Eliminado. Deshacer" durante unos segundos. En la papelera se puede restaurar o borrar definitivamente (con confirmación). Si el elemento tiene trabajos asociados, avisar "esto afecta a N trabajos". El borrado definitivo de un cliente, pedido o trabajo incluye sus elementos dependientes y requiere confirmación explícita.
 
 ## Formato (en `src/logic/formato.js`, con pruebas)
 - Fecha: 31/10/2026. Hora: 15:00 (24 h).

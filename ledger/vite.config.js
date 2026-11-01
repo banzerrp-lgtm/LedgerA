@@ -4,31 +4,44 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig({
   plugins: [
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       devOptions: {
-        enabled: true,
+        enabled: false,
       },
       manifest: {
-        name: 'Ledger by One',
+        name: 'Ledger',
         short_name: 'Ledger',
         description: 'Agenda de encargos para freelances y emprendedores.',
+        lang: 'es',
         start_url: '/',
         display: 'standalone',
-        background_color: '#0f172a',
-        theme_color: '#0f172a',
+        background_color: '#0B0B0B',
+        theme_color: '#0B0B0B',
         icons: [
           {
-            src: '/icon-192.png',
+            src: '/icons/icon-192.png',
             sizes: '192x192',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any',
           },
           {
-            src: '/icon-512.png',
+            src: '/icons/icon-512.png',
             sizes: '512x512',
-            type: 'image/png'
-          }
-        ]
-      }
+            type: 'image/png',
+          },
+          {
+            src: '/icons/icon-maskable-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest,woff2}'],
+        navigateFallback: '/index.html',
+        cleanupOutdatedCaches: true,
+      },
     })
   ],
   server: {
