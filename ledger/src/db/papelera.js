@@ -6,6 +6,7 @@ import {
   softDeleteRecord,
   TABLE_NAMES,
 } from './db.js';
+import { countTrashItems, getTrashUsage, orderTrashDeletion } from '../logic/papelera.js';
 
 const TABLE_LABELS = {
   clientes: 'Clientes',
@@ -71,19 +72,69 @@ async function deleteClientAndChildren(clientId) {
   await permanentlyDeleteRecord('clientes', clientId);
 }
 
-export async function getTrashRecords() {
-  const groups = await Promise.all(TABLE_NAMES.map(async (table) => ({
+async function getTrashSnapshot() {
+  const entries = await Promise.all(TABLE_NAMES.map(async (table) => [
+    table,
+    await db.table(table).toArray(),
+  ]));
+  return Object.fromEntries(entries);
+}
+
+function trashGroupsFromSnapshot(snapshot) {
+  const usage = getTrashUsage(snapshot);
+  return TABLE_NAMES.map((table) => ({
     table,
     label: TABLE_LABELS[table],
-    items: (await getRecords(table, { includeDeleted: true }))
+    items: snapshot[table]
       .filter((record) => record.eliminado)
-      .map((record) => ({
-        ...record,
-        label: recordLabel(table, record),
-        tableLabel: TABLE_LABELS[table],
-      })),
-  })));
-  return groups.filter(({ items }) => items.length);
+      .map((record) => {
+        const usageInfo = usage[table]?.get(record.id);
+        const jobsInUse = typeof usageInfo === 'number' ? usageInfo : usageInfo?.jobs;
+        return {
+          ...record,
+          label: recordLabel(table, record),
+          tableLabel: TABLE_LABELS[table],
+          usageNote: usageInfo === undefined
+            ? ''
+            : jobsInUse
+              ? `En uso por ${jobsInUse} trabajos`
+              : 'En uso por subtipos activos',
+          inUse: usageInfo !== undefined,
+        };
+      }),
+  })).filter(({ items }) => items.length);
+}
+
+export async function getTrashRecords() {
+  return trashGroupsFromSnapshot(await getTrashSnapshot());
+}
+
+export async function getTrashClearSummary() {
+  const snapshot = await getTrashSnapshot();
+  const deletionOrder = orderTrashDeletion(snapshot);
+  return {
+    ...countTrashItems(deletionOrder),
+    deletionOrder,
+  };
+}
+
+export async function emptyTrash() {
+  return db.transaction(
+    'rw',
+    ...TABLE_NAMES.map((table) => db.table(table)),
+    async () => {
+      const snapshot = await getTrashSnapshot();
+      const deletionOrder = orderTrashDeletion(snapshot);
+      const counts = countTrashItems(deletionOrder);
+      for (const table of [...new Set(deletionOrder.map((record) => record.table))]) {
+        const ids = deletionOrder
+          .filter((record) => record.table === table)
+          .map((record) => record.id);
+        await db.table(table).bulkDelete(ids);
+      }
+      return counts.total;
+    },
+  );
 }
 
 export async function restoreTrashRecord(tableName, id) {
@@ -94,6 +145,11 @@ export async function restoreTrashRecord(tableName, id) {
 export async function permanentlyDeleteTrashRecord(tableName, id) {
   if (!TABLE_NAMES.includes(tableName)) throw new TypeError(`Tabla no válida: ${tableName}`);
   if (tableName === 'clientes') {
+    const snapshot = await getTrashSnapshot();
+    const jobsInUse = getTrashUsage(snapshot).clientes.get(id);
+    if (jobsInUse !== undefined) {
+      throw new Error(`En uso por ${jobsInUse} trabajos. No se puede borrar definitivamente.`);
+    }
     return db.transaction('rw', ...TABLE_NAMES.map((table) => db.table(table)), () =>
       deleteClientAndChildren(id));
   }

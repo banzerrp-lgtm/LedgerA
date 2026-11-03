@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  completionDate,
   filterCompletedHistory,
   safeLocationUrl,
   summarizePortfolio,
@@ -35,6 +36,11 @@ const history = [
 ];
 
 describe('historial y portafolio', () => {
+  it('usa la fecha más reciente entre entrega y último pago', () => {
+    expect(completionDate('2026-10-10T12:00:00.000Z', '2026-10-20')).toBe('2026-10-20');
+    expect(completionDate('2026-10-20', '2026-10-10')).toBe('2026-10-20');
+  });
+
   it('filtra historial por texto, cliente, tipo y rango de fechas', () => {
     expect(filterCompletedHistory(history, { query: 'ana' }).map(({ id }) => id))
       .toEqual(['linea-1']);

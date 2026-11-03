@@ -1,6 +1,12 @@
 import { createRecord, db, getRecord, getRecords, updateRecord } from './db.js';
 import { getLineHistoryRecords } from './historial.js';
-import { calculateBalances, calculateLineRefundAmount } from '../logic/saldos.js';
+import {
+  aplicarPagos,
+  calculateBalances,
+  calculateLineRefundAmount,
+  estadoLinea,
+  pedidoActivo,
+} from '../logic/saldos.js';
 import { safeLocationUrl } from '../logic/historial.js';
 import { isSelectableWorkType } from '../logic/tipos-trabajo.js';
 
@@ -87,16 +93,25 @@ export async function createOrderWithLines(order, lines) {
 }
 
 export async function getOrderSummaries() {
-  const [orders, clients, lines] = await Promise.all([
+  const [orders, clients, lines, payments] = await Promise.all([
     getRecords('pedidos'),
     getRecords('clientes'),
     getRecords('lineas'),
+    getRecords('pagos'),
   ]);
   return orders.map((pedido) => ({
     ...pedido,
     cliente: clients.find((client) => client.id === pedido.cliente_id),
-    lineas: lines.filter((line) => line.pedido_id === pedido.id),
-  })).sort((left, right) => right.fecha_pedido.localeCompare(left.fecha_pedido));
+    lineas: aplicarPagos(
+      lines.filter((line) => line.pedido_id === pedido.id),
+      payments.filter((payment) => payment.pedido_id === pedido.id),
+    ),
+  }))
+    .filter((pedido) => pedidoActivo(
+      pedido.lineas,
+      payments.filter((payment) => payment.pedido_id === pedido.id),
+    ))
+    .sort((left, right) => right.fecha_pedido.localeCompare(left.fecha_pedido));
 }
 
 export async function getDashboardData() {
@@ -166,17 +181,22 @@ export async function getOrderDetail(orderId) {
   return {
     pedido,
     cliente: clients.find((client) => client.id === pedido.cliente_id),
-    lineas: orderLines.map((line) => ({
-      ...line,
-      saldo: balances.lineas.find((entry) => entry.id === line.id)?.saldo ?? 0,
-      ubicaciones: lineHistory.ubicaciones
-        .filter((location) => location.linea_id === line.id)
-        .map((location) => ({
-          ...location,
-          url: safeLocationUrl(location.enlace_o_ruta),
-        })),
-      cambios: lineHistory.cambios.filter((change) => change.linea_id === line.id),
-    })),
+    lineas: orderLines.map((line) => {
+      const balance = balances.lineas.find((entry) => entry.id === line.id);
+      return {
+        ...line,
+        ...estadoLinea(line, balance?.pagos_aplicados ?? 0),
+        pagos_aplicados: balance?.pagos_aplicados ?? 0,
+        fecha_ultimo_pago: balance?.fecha_ultimo_pago ?? null,
+        ubicaciones: lineHistory.ubicaciones
+          .filter((location) => location.linea_id === line.id)
+          .map((location) => ({
+            ...location,
+            url: safeLocationUrl(location.enlace_o_ruta),
+          })),
+        cambios: lineHistory.cambios.filter((change) => change.linea_id === line.id),
+      };
+    }),
     pagos: orderPayments.map((payment) => ({
       ...payment,
       linea: orderLines.find((line) => line.id === payment.linea_id),

@@ -1,5 +1,6 @@
 import { createRecord, getRecord, getRecords } from './db.js';
 import { calculateBalances } from '../logic/saldos.js';
+import { completionDate } from '../logic/historial.js';
 import { parseSuggestedPrice } from '../logic/tipos-trabajo.js';
 
 export async function getCompletedHistory() {
@@ -19,7 +20,7 @@ export async function getCompletedHistory() {
   const ordersById = new Map(orders.map((order) => [order.id, order]));
   const typesById = new Map(types.map((type) => [type.id, type]));
   const history = lines
-    .filter((line) => ['entregado', 'cancelado'].includes(line.estado))
+    .filter((line) => lineBalances.get(line.id)?.terminada)
     .map((line) => {
       const order = ordersById.get(line.pedido_id);
       const client = order ? clientsById.get(order.cliente_id) : undefined;
@@ -31,7 +32,10 @@ export async function getCompletedHistory() {
         cliente_nombre: client?.nombre ?? 'Cliente no disponible',
         tipo_nombre: type?.nombre ?? 'Tipo no disponible',
         pedido_notas: order?.notas ?? '',
-        fecha_terminado: line.fecha_terminado ?? line.modificado,
+        fecha_terminado: completionDate(
+          line.fecha_terminado ?? line.fecha_entrega,
+          balance?.fecha_ultimo_pago,
+        ),
         pagos_aplicados: balance?.pagos_aplicados ?? 0,
         saldo: balance?.saldo ?? 0,
       };

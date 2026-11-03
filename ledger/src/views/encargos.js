@@ -16,6 +16,7 @@ import { savePaymentFromForm } from '../db/pagos.js';
 import { buscarClienteDuplicado } from '../logic/clientes.js';
 import { formatSuggestedPrice, parseSuggestedPrice } from '../logic/tipos-trabajo.js';
 import { renderEstadoVacio } from '../components/estadoVacio.js';
+import { renderIcon } from '../components/icons.js';
 import { validarPedido } from '../logic/validaciones.js';
 
 const ORDER_STATES = [
@@ -56,6 +57,20 @@ function decimalPrice(cents) {
 function formatMoney(cents, currencySymbol) {
   const sign = cents < 0 ? '- ' : '';
   return `${sign}${currencySymbol} ${formatSuggestedPrice(Math.abs(cents)).replace(/^Bs\s*/, '')}`;
+}
+
+function paymentMethodLabel(method) {
+  return ({
+    efectivo: 'Efectivo',
+    qr: 'QR',
+    transferencia: 'Transferencia',
+    otro: 'Otro',
+  })[method] ?? method;
+}
+
+function linePaymentTitle(line) {
+  const typeName = line.tipo?.nombre ?? 'Línea';
+  return line.descripcion ? `${typeName} · ${line.descripcion}` : typeName;
 }
 
 function renderOrderLine(index, deliveryDate) {
@@ -161,43 +176,91 @@ export function renderEncargos({ mode = 'list' } = {}) {
 
 function renderOrderDetail(detail) {
   const { pedido, cliente, lineas, pagos, total, pagado, saldo, simboloMoneda } = detail;
+  const orderedLines = lineas.slice().sort((left, right) =>
+    Number(left.terminada) - Number(right.terminada),
+  );
+  const progress = total > 0 ? Math.min(100, Math.max(0, Math.round((pagado / total) * 100))) : 0;
+  const singleLine = lineas.length === 1 ? lineas[0] : null;
   return `
     <section>
-      <a class="back-link" href="#/encargos">‹ Encargos</a>
+      <div class="order-detail-topbar">
+        <a class="back-link" href="#/encargos">‹ Encargos</a>
+        <details class="action-menu order-actions-menu">
+          <summary class="icon-action" aria-label="Más opciones del pedido" title="Más opciones del pedido">
+            ${renderIcon('more-vertical')}
+          </summary>
+          <div class="action-menu-popover">
+            <button class="action-menu-item action-menu-item--danger" type="button" data-order-delete>
+              ${renderIcon('trash')}<span>Enviar pedido a la papelera</span>
+            </button>
+          </div>
+        </details>
+      </div>
       <div class="order-detail-heading">
-        <h2>Pedido</h2>
-        <p>${escapeHtml(cliente?.nombre ?? 'Cliente no disponible')}</p>
-        <p class="muted">Recibido: ${displayDate(pedido.fecha_pedido)}</p>
-        <p class="muted">Pago: ${escapeHtml(pedido.modalidad_pago.replace(/_/g, ' '))}</p>
+        <h2>${escapeHtml(cliente?.nombre ?? 'Cliente no disponible')}</h2>
+        <div class="order-meta-chips">
+          <span class="order-meta-chip">Recibido ${displayDate(pedido.fecha_pedido)}</span>
+          <span class="order-meta-chip">Pago: ${escapeHtml(pedido.modalidad_pago.replace(/_/g, ' '))}</span>
+        </div>
         ${pedido.adelanto_acordado ? `<p class="muted">Adelanto acordado: ${escapeHtml(simboloMoneda)} ${formatSuggestedPrice(pedido.adelanto_acordado).replace(/^Bs\s*/, '')}</p>` : ''}
         ${pedido.notas ? `<p class="muted">${escapeHtml(pedido.notas)}</p>` : ''}
-        <p><strong>Total: ${escapeHtml(formatMoney(total, simboloMoneda))}</strong></p>
-        <p>Pagado: ${escapeHtml(formatMoney(pagado, simboloMoneda))}</p>
-        <p><strong>${saldo < 0 ? 'Saldo a favor' : 'Saldo'}: ${escapeHtml(formatMoney(Math.abs(saldo), simboloMoneda))}</strong></p>
-        <button class="primary-button" type="button" data-payment-new>Registrar pago</button>
-        <button class="danger-button" type="button" data-order-delete>Enviar pedido a la papelera</button>
       </div>
+      <section class="panel order-summary-card" aria-label="Resumen del pedido">
+        <div class="order-summary-values">
+          <div><span>Total</span><strong>${escapeHtml(formatMoney(total, simboloMoneda))}</strong></div>
+          <div><span>Pagado</span><strong>${escapeHtml(formatMoney(pagado, simboloMoneda))}</strong></div>
+          <div><span>Saldo</span><strong>${escapeHtml(formatMoney(Math.abs(saldo), simboloMoneda))}</strong></div>
+        </div>
+        <div class="payment-progress" role="progressbar" aria-label="Porcentaje pagado"
+          aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
+          <span style="width: ${progress}%"></span>
+        </div>
+        <span class="order-summary-status${saldo <= 0 ? ' order-summary-status--paid' : ' order-summary-status--due'}">
+          ${saldo <= 0 ? `${renderIcon('check')}Pagado completo` : `Falta ${escapeHtml(formatMoney(saldo, simboloMoneda))}`}
+        </span>
+      </section>
+      <button class="primary-button order-payment-button${saldo <= 0 ? ' order-payment-button--secondary' : ''}"
+        type="button" data-payment-new>Registrar pago</button>
       <div class="order-lines-detail">
-        ${lineas.map((line) => `
-          <article class="panel order-detail-line">
-            <h3>${escapeHtml(line.tipo?.nombre ?? 'Tipo no disponible')}${line.descripcion ? ` · ${escapeHtml(line.descripcion)}` : ''}</h3>
-            <p>${escapeHtml(simboloMoneda)} ${formatSuggestedPrice(line.precio_acordado).replace(/^Bs\s*/, '')}</p>
+        ${orderedLines.map((line) => `
+          <article class="panel order-detail-line${line.terminada ? ' order-detail-line--completed' : ''}">
+            <div class="order-line-heading">
+              <div>
+                <h3>${escapeHtml(line.descripcion || 'Trabajo')}</h3>
+                <p class="order-line-type">${escapeHtml(line.tipo?.nombre ?? 'Tipo no disponible')}</p>
+              </div>
+              <strong class="order-line-price">${escapeHtml(formatMoney(line.precio_acordado, simboloMoneda))}</strong>
+            </div>
+            <div class="order-line-chips">
+              <span class="order-state-chip">${line.estado === 'en_proceso' ? 'En proceso' : line.estado === 'entregado' ? 'Entregado' : line.estado === 'cancelado' ? 'Cancelado' : 'Pendiente'}</span>
+              <span class="line-payment-status${line.terminada || line.pagada ? ' line-payment-status--paid' : ''}${!line.terminada && !line.pagada && line.estado !== 'cancelado' ? ' line-payment-status--due' : ''}">
+                ${line.estado === 'cancelado'
+                  ? 'Cancelado'
+                  : line.terminada
+                    ? 'Terminado'
+                    : line.pagada
+                      ? 'Pagado'
+                      : `Falta ${escapeHtml(formatMoney(line.saldo, simboloMoneda))}`}
+              </span>
+            </div>
             ${line.nota_descuento ? `<p class="muted">${escapeHtml(line.nota_descuento)}</p>` : ''}
-            <label>
-              Entrega
-              <input type="date" value="${escapeHtml(line.fecha_entrega)}"
-                data-line-date="${escapeHtml(line.id)}" />
-            </label>
+            <div class="order-line-fields-row">
+              <label>
+                Entrega
+                <input type="date" value="${escapeHtml(line.fecha_entrega)}"
+                  data-line-date="${escapeHtml(line.id)}" />
+              </label>
+              <label>
+                Estado
+                <select data-line-status="${escapeHtml(line.id)}">
+                  ${ORDER_STATES.map(([value, label]) => `
+                    <option value="${value}" ${line.estado === value ? 'selected' : ''}>${label}</option>
+                  `).join('')}
+                </select>
+              </label>
+            </div>
             ${line.hora_entrega ? `<p class="muted">Hora: ${escapeHtml(line.hora_entrega)}</p>` : ''}
-            <label>
-              Estado
-              <select data-line-status="${escapeHtml(line.id)}">
-                ${ORDER_STATES.map(([value, label]) => `
-                  <option value="${value}" ${line.estado === value ? 'selected' : ''}>${label}</option>
-                `).join('')}
-              </select>
-            </label>
-            <button class="secondary-button" type="button" data-payment-new
+            <button class="secondary-button order-line-payment-button" type="button" data-payment-new
               data-line-id="${escapeHtml(line.id)}">Registrar pago de esta línea</button>
             <button class="danger-button" type="button" data-line-delete="${escapeHtml(line.id)}">
               Enviar trabajo a la papelera
@@ -263,71 +326,117 @@ function renderOrderDetail(detail) {
           <div class="payment-list">
             ${pagos.map((payment) => `
               <article class="payment-entry">
-                <div>
+                <span class="payment-wallet-icon">${renderIcon('wallet')}</span>
+                <div class="payment-entry-copy">
                   <strong>${payment.tipo === 'devolucion' ? 'Devolución' : 'Cobro'} · ${escapeHtml(formatMoney(payment.monto, simboloMoneda))}</strong>
-                  <p class="muted">${displayDate(payment.fecha)} · ${escapeHtml(payment.methodLabel ?? payment.metodo.toUpperCase())}${payment.linea ? ` · ${escapeHtml(payment.linea.tipo?.nombre ?? 'Línea')}` : ' · Pedido'}</p>
-                  ${payment.nota ? `<p class="muted">${escapeHtml(payment.nota)}</p>` : ''}
+                  <p>${displayDate(payment.fecha)} · ${escapeHtml(paymentMethodLabel(payment.metodo))} · ${escapeHtml(payment.linea ? linePaymentTitle(payment.linea) : 'Pedido completo')}</p>
                 </div>
-                <div class="payment-actions">
-                  <button class="secondary-button" type="button" data-payment-edit="${escapeHtml(payment.id)}">Editar</button>
-                  <button class="danger-button" type="button" data-payment-delete="${escapeHtml(payment.id)}">Papelera</button>
-                </div>
+                <details class="action-menu payment-actions">
+                  <summary class="icon-action" aria-label="Opciones del pago" title="Opciones del pago">
+                    ${renderIcon('more-vertical')}
+                  </summary>
+                  <div class="action-menu-popover action-menu-popover--right">
+                    <button class="action-menu-item" type="button" data-payment-edit="${escapeHtml(payment.id)}">Editar</button>
+                    <button class="action-menu-item action-menu-item--danger" type="button" data-payment-delete="${escapeHtml(payment.id)}">
+                      ${renderIcon('trash')}<span>Mover a la papelera</span>
+                    </button>
+                  </div>
+                </details>
               </article>
             `).join('')}
           </div>
         ` : '<p class="muted">Todavía no hay pagos registrados.</p>'}
       </section>
-      <section class="panel payment-form-panel" id="payment-form-panel" hidden>
-        <h3 id="payment-form-title">Registrar pago</h3>
-        <form id="payment-form" class="payment-form">
-          <label>
-            Aplicar a
-            <select name="linea_id">
-              <option value="">Pedido completo</option>
-              ${lineas.map((line) => `
-                <option value="${escapeHtml(line.id)}">${escapeHtml(line.tipo?.nombre ?? 'Línea')}${line.descripcion ? ` · ${escapeHtml(line.descripcion)}` : ''}</option>
-              `).join('')}
-            </select>
-          </label>
-          <label>
-            Monto (${escapeHtml(simboloMoneda)})
-            <input name="monto" type="text" inputmode="decimal" placeholder="0,00" required />
-          </label>
-          <label>
-            Fecha
-            <input name="fecha" type="date" value="${escapeHtml(localDateString())}" required />
-          </label>
-          <label>
-            Tipo
-            <select name="tipo">
-              <option value="cobro">Cobro</option>
-              <option value="devolucion">Devolución</option>
-            </select>
-          </label>
-          <label>
-            Método
-            <select name="metodo">
-              <option value="efectivo">Efectivo</option>
-              <option value="qr">QR</option>
-              <option value="transferencia">Transferencia</option>
-              <option value="otro">Otro</option>
-            </select>
-          </label>
-          <label>
-            Nota (opcional)
-            <textarea name="nota" maxlength="500"></textarea>
-          </label>
-          <p class="order-feedback" id="payment-feedback" role="status" hidden></p>
-          <div class="client-form-actions">
-            <button class="primary-button" type="submit">Guardar pago</button>
-            <button class="secondary-button" type="button" data-payment-cancel>Cancelar</button>
-          </div>
-        </form>
-      </section>
+      <div class="payment-sheet-backdrop" id="payment-sheet-backdrop" hidden>
+        <section class="payment-sheet" id="payment-form-panel" role="dialog" aria-modal="true"
+          aria-labelledby="payment-form-title">
+          <div class="payment-sheet-grabber" aria-hidden="true"><span></span></div>
+          <header class="payment-sheet-header">
+            <div>
+              <h2 id="payment-form-title">Registrar pago</h2>
+              <p id="payment-order-summary"></p>
+            </div>
+            <button class="icon-action" type="button" data-payment-close aria-label="Cerrar panel">
+              ${renderIcon('x')}
+            </button>
+          </header>
+          <form id="payment-form" class="payment-form">
+            <div class="payment-sheet-fields">
+              <label class="payment-field">
+                Aplicar a
+                <select name="linea_id">
+                  <option value="" ${singleLine ? '' : 'selected'}>Pedido completo (saldo ${escapeHtml(formatMoney(Math.max(0, saldo), simboloMoneda))})</option>
+                  ${lineas.map((line) => `
+                    <option value="${escapeHtml(line.id)}" ${singleLine?.id === line.id ? 'selected' : ''}>${escapeHtml(linePaymentTitle(line))} (saldo ${escapeHtml(formatMoney(line.saldo, simboloMoneda))})</option>
+                  `).join('')}
+                </select>
+                ${lineas.length > 1 ? '<span class="payment-field-help" id="payment-allocation-help">Se reparte entre los trabajos por orden de entrega</span>' : ''}
+              </label>
+              <label class="payment-field payment-amount-field">
+                Monto
+                <span class="payment-amount-input">
+                  <span>${escapeHtml(simboloMoneda)}</span>
+                  <input name="monto" type="text" inputmode="decimal" autocomplete="off"
+                    placeholder="0,00" required aria-describedby="payment-amount-error" />
+                </span>
+                <span class="payment-field-error" id="payment-amount-error" role="status"></span>
+                <button class="payment-full-balance" type="button" data-payment-full-balance>
+                  Pagar saldo completo (${escapeHtml(formatMoney(Math.max(0, saldo), simboloMoneda))})
+                </button>
+              </label>
+              <fieldset class="payment-choice-field">
+                <legend>Tipo</legend>
+                <div class="payment-segmented-control">
+                  <label><input type="radio" name="tipo" value="cobro" checked /><span>Cobro</span></label>
+                  <label><input type="radio" name="tipo" value="devolucion" /><span>Devolución</span></label>
+                </div>
+              </fieldset>
+              <fieldset class="payment-choice-field">
+                <legend>Método</legend>
+                <div class="payment-method-chips">
+                  ${[['efectivo', 'Efectivo'], ['qr', 'QR'], ['transferencia', 'Transferencia'], ['otro', 'Otro']].map(([value, label], index) => `
+                    <label><input type="radio" name="metodo" value="${value}" ${index === 0 ? 'checked' : ''} /><span>${label}</span></label>
+                  `).join('')}
+                </div>
+              </fieldset>
+              <label class="payment-field">
+                Fecha
+                <input name="fecha" type="date" value="${escapeHtml(localDateString())}" required />
+              </label>
+              <details class="payment-note">
+                <summary>Nota (opcional) <span>Agregar nota</span></summary>
+                <input name="nota" type="text" maxlength="500" placeholder="Escribe una nota" />
+              </details>
+              <p class="payment-preview" id="payment-preview" aria-live="polite"></p>
+              <p class="order-feedback" id="payment-feedback" role="status" hidden></p>
+            </div>
+            <footer class="payment-sheet-footer">
+              <button class="primary-button payment-save-button" type="submit" disabled>Guardar pago</button>
+              <button class="payment-cancel-button" type="button" data-payment-cancel>Cancelar</button>
+            </footer>
+          </form>
+        </section>
+      </div>
       <div class="client-undo" id="payment-undo" role="status" hidden>
         <span id="payment-undo-message">Pago enviado a la papelera.</span>
         <button class="secondary-button" type="button" data-payment-undo>Deshacer</button>
       </div>
+      <div class="client-undo payment-registered-notice" id="payment-registered-notice" role="status" hidden>
+        <span>Pago registrado</span>
+      </div>
+      <div class="client-undo" id="line-completed-notice" role="status" hidden>
+        <span>Movido a Terminados</span>
+        <button class="secondary-button" type="button" data-completed-view>Ver</button>
+        <button class="secondary-button" type="button" data-completed-undo>Deshacer</button>
+      </div>
+      <dialog class="status-dialog" id="payment-complete-dialog">
+        <h3>Pago completo</h3>
+        <p>¿Ya entregaste «<span id="payment-complete-title"></span>»?</p>
+        <div class="client-form-actions">
+          <button class="primary-button" type="button" data-payment-complete-yes>Sí, ya lo entregué</button>
+          <button class="secondary-button" type="button" data-payment-complete-no>Todavía no</button>
+        </div>
+      </dialog>
     </section>
   `;
 }
@@ -363,9 +472,10 @@ function mountOrderList(root) {
       }
       feedback.hidden = true;
       list.innerHTML = orders.map((order) => {
-        const remaining = order.lineas.filter((line) => !['entregado', 'cancelado'].includes(line.estado)).length;
+        const remaining = order.lineas
+          .filter((line) => line.estado !== 'cancelado' && !line.terminada).length;
         const earliest = order.lineas
-          .filter((line) => line.estado !== 'cancelado')
+          .filter((line) => line.estado !== 'cancelado' && !line.terminada)
           .map((line) => line.fecha_entrega)
           .sort()[0];
         return `
@@ -640,8 +750,76 @@ function mountOrderForm(root) {
 
 function mountOrderDetail(root, orderId, initialLineId = null) {
   let recentlyDeletedPaymentId = null;
+  let recentlyCompletedLine = null;
+  let paymentSheetOpen = false;
+  let paymentToastTimer;
+  const pendingPaymentPrompts = [];
   let undoTimer;
   let currentDetail;
+
+  const closePaymentSheet = () => {
+    paymentSheetOpen = false;
+    const backdrop = root.querySelector('#payment-sheet-backdrop');
+    if (backdrop) backdrop.hidden = true;
+  };
+
+  const updatePaymentPreview = () => {
+    const form = root.querySelector('#payment-form');
+    if (!form || !currentDetail) return;
+    const input = form.elements.monto;
+    const amount = parseSuggestedPrice(input.value);
+    const valid = Number.isSafeInteger(amount) && amount > 0;
+    const error = root.querySelector('#payment-amount-error');
+    const saveButton = form.querySelector('.payment-save-button');
+    const preview = root.querySelector('#payment-preview');
+    error.textContent = !valid
+      ? 'Ingresa un monto válido mayor que cero.'
+      : '';
+    saveButton.disabled = !valid;
+    const selectedLine = currentDetail.lineas.find(({ id }) => id === form.elements.linea_id.value);
+    const paymentBeingEdited = currentDetail.pagos.find(({ id }) => id === form.dataset.paymentId);
+    const previousAppliesToSelection = selectedLine
+      ? paymentBeingEdited?.linea_id === selectedLine.id
+      : !paymentBeingEdited?.linea_id;
+    const previousPaymentNet = paymentBeingEdited && previousAppliesToSelection
+      ? (paymentBeingEdited.tipo === 'devolucion' ? -paymentBeingEdited.monto : paymentBeingEdited.monto)
+      : 0;
+    const currentBalance = Math.max(
+      0,
+      (selectedLine?.saldo ?? currentDetail.saldo) + previousPaymentNet,
+    );
+    const after = currentBalance
+      + (form.elements.tipo.value === 'devolucion' ? amount || 0 : -(amount || 0));
+    if (valid && form.elements.tipo.value === 'cobro' && amount > currentBalance) {
+      preview.textContent = `Supera el saldo por ${formatMoney(amount - currentBalance, currentDetail.simboloMoneda)}`;
+      preview.className = 'payment-preview payment-preview--due';
+      return;
+    }
+    preview.textContent = `Después de este pago: saldo ${formatMoney(Math.max(0, after), currentDetail.simboloMoneda)}`;
+    preview.className = `payment-preview ${after <= 0 ? 'payment-preview--paid' : 'payment-preview--due'}`;
+  };
+
+  const openPaymentSheet = ({ lineId = null, payment = null } = {}) => {
+    const form = root.querySelector('#payment-form');
+    form.reset();
+    form.dataset.paymentId = payment?.id ?? '';
+    form.elements.fecha.value = payment?.fecha ?? localDateString();
+    form.elements.linea_id.value = payment?.linea_id ?? lineId ?? (
+      currentDetail.lineas.length === 1 ? currentDetail.lineas[0].id : ''
+    );
+    if (payment) {
+      form.elements.monto.value = decimalPrice(payment.monto);
+      form.elements.tipo.value = payment.tipo;
+      form.elements.metodo.value = payment.metodo;
+      form.elements.nota.value = payment.nota ?? '';
+    }
+    root.querySelector('#payment-form-title').textContent = payment ? 'Editar pago' : 'Registrar pago';
+    root.querySelector('#payment-feedback').hidden = true;
+    paymentSheetOpen = true;
+    root.querySelector('#payment-sheet-backdrop').hidden = false;
+    updatePaymentPreview();
+    form.elements.monto.focus();
+  };
 
   const render = async () => {
     try {
@@ -652,7 +830,29 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
       }
       currentDetail = detail;
       root.innerHTML = renderOrderDetail(detail);
+      root.querySelector('#payment-sheet-backdrop').hidden = !paymentSheetOpen;
+      root.querySelector('#payment-order-summary').textContent =
+        `${detail.cliente?.nombre ?? 'Cliente'} · ${detail.saldo < 0 ? 'Saldo a favor' : 'Saldo'} ${formatMoney(Math.abs(detail.saldo), detail.simboloMoneda)}`;
       root.querySelector('#payment-undo').hidden = !recentlyDeletedPaymentId;
+      root.querySelector('#payment-registered-notice').hidden = !paymentToastTimer;
+      root.querySelector('#line-completed-notice').hidden = !recentlyCompletedLine;
+      if (paymentSheetOpen) updatePaymentPreview();
+      const completionDialog = root.querySelector('#payment-complete-dialog');
+      completionDialog.addEventListener('cancel', (event) => {
+        event.preventDefault();
+        pendingPaymentPrompts.shift();
+        render();
+      });
+      if (pendingPaymentPrompts.length) {
+        const promptLine = detail.lineas.find(({ id }) => id === pendingPaymentPrompts[0].lineId);
+        if (promptLine) {
+          root.querySelector('#payment-complete-title').textContent =
+            promptLine.descripcion || promptLine.tipo?.nombre || 'este trabajo';
+          completionDialog.showModal();
+        }
+      } else if (completionDialog.open) {
+        completionDialog.close();
+      }
       if (initialLineId) {
         const line = detail.lineas.find(({ id }) => id === initialLineId);
         initialLineId = null;
@@ -662,8 +862,9 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
           form.dataset.paymentId = '';
           form.elements.fecha.value = localDateString();
           form.elements.linea_id.value = line.id;
-          root.querySelector('#payment-form-title').textContent = 'Registrar pago';
-          root.querySelector('#payment-form-panel').hidden = false;
+          paymentSheetOpen = true;
+          root.querySelector('#payment-sheet-backdrop').hidden = false;
+          updatePaymentPreview();
           form.elements.monto.focus();
         }
       }
@@ -674,6 +875,7 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
   };
 
   root.addEventListener('change', async (event) => {
+    if (event.target.closest('#payment-form')) updatePaymentPreview();
     const status = event.target.closest('[data-line-status]');
     const date = event.target.closest('[data-line-date]');
     if (!status && !date) return;
@@ -684,8 +886,16 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
           `Hay ${formatMoney(refundAmount, currentDetail.simboloMoneda)} asignados a este trabajo. ¿Registrar una devolución? Si eliges Cancelar, se conservará como saldo a favor.`,
         );
         await cancelOrderLine(status.dataset.lineStatus, { refundAdvance });
-      } else if (status) await updateLineStatus(status.dataset.lineStatus, status.value);
-      else await updateLineDeliveryDate(date.dataset.lineDate, date.value);
+      } else if (status) {
+        const line = currentDetail.lineas.find(({ id }) => id === status.dataset.lineStatus);
+        const previousStatus = line?.estado;
+        await updateLineStatus(status.dataset.lineStatus, status.value);
+        if (status.value === 'entregado' && line?.pagada && previousStatus !== 'entregado') {
+          recentlyCompletedLine = { lineId: line.id, previousStatus };
+        }
+      } else {
+        await updateLineDeliveryDate(date.dataset.lineDate, date.value);
+      }
       await render();
     } catch (error) {
       console.error('No se pudo actualizar la línea del pedido.', error);
@@ -694,43 +904,91 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
     }
   });
 
+  root.addEventListener('input', (event) => {
+    if (event.target.closest('#payment-form')) updatePaymentPreview();
+  });
+
+  root.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && paymentSheetOpen) {
+      event.preventDefault();
+      closePaymentSheet();
+    }
+  });
+
   root.addEventListener('click', async (event) => {
+    const activeMenu = event.target.closest('.action-menu');
+    root.querySelectorAll('.action-menu[open]').forEach((menu) => {
+      if (menu !== activeMenu) menu.open = false;
+    });
     const newPayment = event.target.closest('[data-payment-new]');
     const editPayment = event.target.closest('[data-payment-edit]');
     const deletePayment = event.target.closest('[data-payment-delete]');
     const deleteLine = event.target.closest('[data-line-delete]');
     const deleteOrder = event.target.closest('[data-order-delete]');
-    const cancelPayment = event.target.closest('[data-payment-cancel]');
     const undoPayment = event.target.closest('[data-payment-undo]');
-    if (newPayment) {
+    const completedView = event.target.closest('[data-completed-view]');
+    const completedUndo = event.target.closest('[data-completed-undo]');
+    const completePaymentYes = event.target.closest('[data-payment-complete-yes]');
+    const completePaymentNo = event.target.closest('[data-payment-complete-no]');
+    const closePayment = event.target.closest('[data-payment-close], [data-payment-cancel]');
+    const sheetBackdrop = event.target.id === 'payment-sheet-backdrop';
+    const fullBalance = event.target.closest('[data-payment-full-balance]');
+    if (closePayment || sheetBackdrop) {
+      closePaymentSheet();
+      return;
+    }
+    if (fullBalance) {
       const form = root.querySelector('#payment-form');
-      form.reset();
-      form.dataset.paymentId = '';
-      form.elements.fecha.value = localDateString();
-      form.elements.linea_id.value = newPayment.dataset.lineId ?? '';
-      root.querySelector('#payment-form-title').textContent = 'Registrar pago';
-      root.querySelector('#payment-form-panel').hidden = false;
-      form.elements.monto.focus();
+      const selectedLine = currentDetail.lineas.find(({ id }) => id === form.elements.linea_id.value);
+      form.elements.monto.value = decimalPrice(Math.max(0, selectedLine?.saldo ?? currentDetail.saldo));
+      updatePaymentPreview();
+      return;
+    }
+    if (completedView) {
+      recentlyCompletedLine = null;
+      window.location.hash = '#/terminados';
+      return;
+    }
+    if (completedUndo && recentlyCompletedLine) {
+      const previous = recentlyCompletedLine;
+      recentlyCompletedLine = null;
+      try {
+        await updateLineStatus(previous.lineId, previous.previousStatus);
+        await render();
+      } catch (error) {
+        console.error('No se pudo deshacer el movimiento a Terminados.', error);
+        window.alert(error.message || 'No se pudo deshacer el cambio.');
+        recentlyCompletedLine = previous;
+        await render();
+      }
+      return;
+    }
+    if (completePaymentYes || completePaymentNo) {
+      const prompt = pendingPaymentPrompts.shift();
+      if (completePaymentYes && prompt) {
+        try {
+          await updateLineStatus(prompt.lineId, 'entregado');
+          recentlyCompletedLine = {
+            lineId: prompt.lineId,
+            previousStatus: prompt.previousStatus,
+          };
+        } catch (error) {
+          console.error('No se pudo marcar el trabajo como entregado.', error);
+          window.alert(error.message || 'No se pudo actualizar el estado del trabajo.');
+        }
+      }
+      await render();
+      return;
+    }
+    if (newPayment) {
+      openPaymentSheet({ lineId: newPayment.dataset.lineId ?? null });
       return;
     }
     if (editPayment) {
       const payment = currentDetail?.pagos.find(({ id }) => id === editPayment.dataset.paymentEdit);
       if (!payment) return;
-      const form = root.querySelector('#payment-form');
-      form.dataset.paymentId = payment.id;
-      form.elements.linea_id.value = payment.linea_id ?? '';
-      form.elements.monto.value = decimalPrice(payment.monto);
-      form.elements.fecha.value = payment.fecha;
-      form.elements.tipo.value = payment.tipo;
-      form.elements.metodo.value = payment.metodo;
-      form.elements.nota.value = payment.nota ?? '';
-      root.querySelector('#payment-form-title').textContent = 'Editar pago';
-      root.querySelector('#payment-form-panel').hidden = false;
-      form.elements.monto.focus();
-      return;
-    }
-    if (cancelPayment) {
-      root.querySelector('#payment-form-panel').hidden = true;
+      editPayment.closest('details').open = false;
+      openPaymentSheet({ payment });
       return;
     }
     if (deleteLine) {
@@ -751,7 +1009,8 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
       return;
     }
     if (deleteOrder) {
-      if (!window.confirm('¿Enviar este pedido a la papelera? Sus trabajos y pagos se conservarán y volverán al restaurarlo.')) return;
+      deleteOrder.closest('details').open = false;
+      if (!window.confirm('¿Enviar este pedido a la papelera? Podrás restaurarlo.')) return;
       try {
         await softDeleteOrder(decodeURIComponent(orderId));
         window.location.hash = '#/encargos';
@@ -762,6 +1021,7 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
       return;
     }
     if (deletePayment) {
+      deletePayment.closest('details').open = false;
       try {
         await softDeleteRecord('pagos', deletePayment.dataset.paymentDelete);
         recentlyDeletedPaymentId = deletePayment.dataset.paymentDelete;
@@ -832,6 +1092,25 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
     event.preventDefault();
     const feedback = root.querySelector('#payment-feedback');
     try {
+      const amount = parseSuggestedPrice(form.elements.monto.value);
+      const currentPayment = currentDetail.pagos.find(({ id }) => id === form.dataset.paymentId);
+      const currentPaymentNet = currentPayment
+        ? (currentPayment.tipo === 'devolucion' ? -currentPayment.monto : currentPayment.monto)
+        : 0;
+      const balanceBeforeUpdate = currentDetail.saldo + currentPaymentNet;
+      if (
+        form.elements.tipo.value === 'cobro'
+        && Number.isSafeInteger(amount)
+        && amount > balanceBeforeUpdate
+        && !window.confirm(
+          `Supera el saldo por ${formatMoney(amount - balanceBeforeUpdate, currentDetail.simboloMoneda)}. ¿Guardar como saldo a favor?`,
+        )
+      ) return;
+
+      const previouslyPaid = new Set(
+        currentDetail.lineas.filter((line) => line.pagada).map((line) => line.id),
+      );
+      const previousStatusById = new Map(currentDetail.lineas.map((line) => [line.id, line.estado]));
       await savePaymentFromForm({
         id: form.dataset.paymentId || undefined,
         pedido_id: decodeURIComponent(orderId),
@@ -842,7 +1121,25 @@ function mountOrderDetail(root, orderId, initialLineId = null) {
         metodo: form.elements.metodo.value,
         nota: form.elements.nota.value,
       });
+      paymentSheetOpen = false;
+      window.clearTimeout(paymentToastTimer);
+      paymentToastTimer = window.setTimeout(() => {
+        paymentToastTimer = null;
+        const notice = root.querySelector('#payment-registered-notice');
+        if (notice) notice.hidden = true;
+      }, 3500);
       await render();
+      pendingPaymentPrompts.push(...currentDetail.lineas
+        .filter((line) =>
+          line.pagada
+          && line.estado !== 'entregado'
+          && !previouslyPaid.has(line.id),
+        )
+        .map((line) => ({
+          lineId: line.id,
+          previousStatus: previousStatusById.get(line.id),
+        })));
+      if (pendingPaymentPrompts.length) await render();
     } catch (error) {
       console.error('No se pudo guardar el pago.', error);
       feedback.hidden = false;

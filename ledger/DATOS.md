@@ -33,7 +33,7 @@ Por cliente:
 - deuda_exigible = max(0, total_entregado − cobros_netos).
 - saldo_a_favor = max(0, cobros_netos − total_vigente).
 Los mismos cálculos existen por pedido. Los saldos nunca se guardan, siempre se calculan.
-Para mostrar la deuda por trabajo: los pagos con linea_id se aplican a esa línea; los demás se reparten entre las líneas entregadas en orden de fecha de entrega.
+Para aplicar pagos por trabajo: los pagos con `linea_id` se aplican solo a esa línea. Los pagos sin línea se reparten entre las líneas no canceladas, primero las entregadas y luego las pendientes; dentro de cada grupo se ordenan por fecha de entrega y por fecha de creación. Cada línea recibe como máximo su precio acordado. Las devoluciones restan de la línea indicada o del reparto general si no tienen línea. Las líneas canceladas o eliminadas no reciben pagos; cualquier excedente queda como saldo a favor. Todo se calcula en centavos y no se guarda el monto aplicado.
 
 ## Estadísticas
 - Los ingresos se calculan por fecha del pago, no por fecha de entrega: cobros suman y devoluciones restan.

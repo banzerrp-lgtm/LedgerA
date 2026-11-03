@@ -100,14 +100,15 @@ export function mountTerminados(root) {
     historyList.innerHTML = filtered.map((entry) => `
       <article class="history-entry">
         <div>
-          <strong>${escapeHtml(entry.tipo_nombre)}${entry.descripcion ? ` · ${escapeHtml(entry.descripcion)}` : ''}</strong>
+          <strong>${escapeHtml(entry.descripcion || entry.tipo_nombre)}</strong>
+          <p class="muted">${escapeHtml(entry.tipo_nombre)}</p>
           <p>Para ${entry.cliente_id
             ? `<a href="#/cliente/${encodeURIComponent(entry.cliente_id)}">${escapeHtml(entry.cliente_nombre)}</a>`
             : escapeHtml(entry.cliente_nombre)}</p>
-          <p class="muted">${entry.estado === 'cancelado' ? 'Cancelado' : 'Entregado'} · ${displayDate(entry.fecha_terminado)}</p>
+          <p class="muted">Terminado · ${displayDate(entry.fecha_terminado)}</p>
         </div>
         <div class="history-money">
-          <span>Total: ${money(entry.precio_acordado, currencySymbol)}</span>
+          <span>Precio: ${money(entry.precio_acordado, currencySymbol)}</span>
           <span>Pagado: ${money(entry.pagos_aplicados, currencySymbol)}</span>
         </div>
       </article>
@@ -160,7 +161,7 @@ export function mountTerminados(root) {
       history = result.history;
       currencySymbol = result.simboloMoneda;
       const types = new Map(
-        records.map((entry) => [entry.tipo_id, entry.tipo_nombre]),
+        history.map((entry) => [entry.tipo_id, entry.tipo_nombre]),
       );
       typeFilter.insertAdjacentHTML('beforeend', [...types.entries()].map(([id, name]) =>
         `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`,

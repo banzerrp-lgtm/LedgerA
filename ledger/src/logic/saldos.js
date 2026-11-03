@@ -1,15 +1,160 @@
+function isActive(record) {
+  return !record.eliminado;
+}
+
 function paymentNet(payments) {
-  return payments.reduce(
+  return payments.filter(isActive).reduce(
     (sum, payment) => sum + (payment.tipo === 'devolucion' ? -payment.monto : payment.monto),
     0,
   );
 }
 
+function compareLines(left, right) {
+  return String(left.fecha_entrega ?? '').localeCompare(String(right.fecha_entrega ?? ''))
+    || String(left.creado ?? '').localeCompare(String(right.creado ?? ''))
+    || String(left.id ?? '').localeCompare(String(right.id ?? ''));
+}
+
+function orderLinesForAllocation(lines) {
+  return lines
+    .filter((line) => isActive(line) && line.estado !== 'cancelado')
+    .slice()
+    .sort((left, right) => {
+      const deliveryOrder = Number(right.estado === 'entregado') - Number(left.estado === 'entregado');
+      return deliveryOrder || compareLines(left, right);
+    });
+}
+
+function comparePayments(left, right) {
+  return String(left.fecha ?? '').localeCompare(String(right.fecha ?? ''))
+    || String(left.creado ?? '').localeCompare(String(right.creado ?? ''));
+}
+
+export function aplicarPagos(lineas, pagos) {
+  const activeLines = lineas.filter(isActive);
+  const eligibleLines = orderLinesForAllocation(activeLines);
+  const appliedByLine = new Map(eligibleLines.map((line) => [line.id, 0]));
+  const extraByLine = new Map(eligibleLines.map((line) => [line.id, 0]));
+  const lastPaymentByLine = new Map();
+  let generalExtra = 0;
+  const sortedPayments = pagos.filter(isActive).slice().sort(comparePayments);
+
+  function applyToLine(line, payment, amount) {
+    const current = appliedByLine.get(line.id) ?? 0;
+    const changed = Math.min(amount, Math.max(0, line.precio_acordado - current));
+    if (!changed) return amount;
+    appliedByLine.set(line.id, current + changed);
+    lastPaymentByLine.set(line.id, payment.fecha ?? '');
+    return amount - changed;
+  }
+
+  function refundLine(line, payment, amount) {
+    const extra = extraByLine.get(line.id) ?? 0;
+    const refundedExtra = Math.min(amount, extra);
+    extraByLine.set(line.id, extra - refundedExtra);
+    const remaining = amount - refundedExtra;
+    const current = appliedByLine.get(line.id) ?? 0;
+    const refundedApplied = Math.min(remaining, current);
+    if (refundedApplied) {
+      appliedByLine.set(line.id, current - refundedApplied);
+      lastPaymentByLine.set(line.id, payment.fecha ?? '');
+    }
+    return remaining - refundedApplied;
+  }
+
+  for (const payment of sortedPayments) {
+    if (!Number.isSafeInteger(payment.monto) || payment.monto <= 0) continue;
+    const isRefund = payment.tipo === 'devolucion';
+    let remaining = payment.monto;
+    if (payment.linea_id) {
+      const line = eligibleLines.find(({ id }) => id === payment.linea_id);
+      if (!line) continue;
+      if (isRefund) {
+        refundLine(line, payment, remaining);
+      } else {
+        remaining = applyToLine(line, payment, remaining);
+        lastPaymentByLine.set(line.id, payment.fecha ?? '');
+        extraByLine.set(line.id, (extraByLine.get(line.id) ?? 0) + remaining);
+      }
+      continue;
+    }
+
+    if (isRefund) {
+      const refundedGeneralExtra = Math.min(remaining, generalExtra);
+      generalExtra -= refundedGeneralExtra;
+      remaining -= refundedGeneralExtra;
+      for (const line of eligibleLines) {
+        if (!remaining) break;
+        const extra = extraByLine.get(line.id) ?? 0;
+        const refundedExtra = Math.min(remaining, extra);
+        extraByLine.set(line.id, extra - refundedExtra);
+        remaining -= refundedExtra;
+      }
+      for (const line of eligibleLines) {
+        if (!remaining) break;
+        remaining = refundLine(line, payment, remaining);
+      }
+    } else {
+      for (const line of eligibleLines) {
+        if (!remaining) break;
+        remaining = applyToLine(line, payment, remaining);
+      }
+      generalExtra += remaining;
+    }
+  }
+
+  return activeLines.map((line) => {
+    const pagos_aplicados = appliedByLine.get(line.id) ?? 0;
+    const state = estadoLinea(line, pagos_aplicados);
+    return {
+      ...line,
+      pagos_aplicados,
+      ...state,
+      fecha_ultimo_pago: lastPaymentByLine.get(line.id) ?? null,
+    };
+  });
+}
+
+export function estadoLinea(linea, aplicado) {
+  const precio = Number.isSafeInteger(linea.precio_acordado) ? linea.precio_acordado : 0;
+  const montoAplicado = Number.isSafeInteger(aplicado) ? aplicado : 0;
+  const pagada = precio > 0 && montoAplicado >= precio
+    && isActive(linea)
+    && linea.estado !== 'cancelado';
+  return {
+    aplicado: montoAplicado,
+    saldo: Math.max(0, precio - montoAplicado),
+    pagada,
+    terminada: linea.estado === 'entregado' && pagada,
+  };
+}
+
+export function esTerminada(linea, aplicado) {
+  const precio = Number.isSafeInteger(linea.precio_acordado) ? linea.precio_acordado : 0;
+  return linea.estado === 'entregado'
+    && isActive(linea)
+    && precio > 0
+    && Number.isSafeInteger(aplicado)
+    && aplicado >= precio;
+}
+
+export function pedidoActivo(lineas, pagos) {
+  const balances = new Map(
+    aplicarPagos(lineas, pagos).map((linea) => [linea.id, linea.pagos_aplicados]),
+  );
+  return lineas.some((linea) =>
+    isActive(linea)
+    && linea.estado !== 'cancelado'
+    && !esTerminada(linea, balances.get(linea.id) ?? 0),
+  );
+}
+
 function calculateTotals(lines, payments) {
-  const totalVigente = lines
+  const activeLines = lines.filter((line) => isActive(line));
+  const totalVigente = activeLines
     .filter((line) => line.estado !== 'cancelado')
     .reduce((sum, line) => sum + line.precio_acordado, 0);
-  const totalEntregado = lines
+  const totalEntregado = activeLines
     .filter((line) => line.estado === 'entregado')
     .reduce((sum, line) => sum + line.precio_acordado, 0);
   const cobrosNetos = paymentNet(payments);
@@ -23,46 +168,13 @@ function calculateTotals(lines, payments) {
   };
 }
 
-function allocatePaymentsToLines(lines, payments) {
-  const delivered = lines
-    .filter((line) => line.estado === 'entregado')
-    .slice()
-    .sort((left, right) =>
-      left.fecha_entrega.localeCompare(right.fecha_entrega)
-      || left.id.localeCompare(right.id),
-    );
-  const directPayments = new Map();
-  let unassignedNet = 0;
-
-  for (const payment of payments) {
-    const net = payment.tipo === 'devolucion' ? -payment.monto : payment.monto;
-    if (payment.linea_id) {
-      directPayments.set(
-        payment.linea_id,
-        (directPayments.get(payment.linea_id) ?? 0) + net,
-      );
-    } else {
-      unassignedNet += net;
-    }
-  }
-
-  const balances = delivered.map((line) => ({
-    ...line,
-    pagos_aplicados: directPayments.get(line.id) ?? 0,
-    saldo: Math.max(0, line.precio_acordado - (directPayments.get(line.id) ?? 0)),
-  }));
-  if (unassignedNet < 0 && balances.length) {
-    balances[0].saldo -= unassignedNet;
-    unassignedNet = 0;
-  }
-  for (const line of balances) {
-    if (unassignedNet <= 0) break;
-    const applied = Math.min(line.saldo, unassignedNet);
-    line.saldo -= applied;
-    line.pagos_aplicados += applied;
-    unassignedNet -= applied;
-  }
-  return balances;
+export function daysSinceDelivery(deliveredAt, today = new Date()) {
+  const deliveryDate = dateOnly(deliveredAt);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return 0;
+  const [year, month, day] = deliveryDate.split('-').map(Number);
+  const start = Date.UTC(year, month - 1, day);
+  const end = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.max(0, Math.floor((end - start) / 86_400_000));
 }
 
 function dateOnly(value) {
@@ -76,26 +188,20 @@ function dateOnly(value) {
   return `${year}-${month}-${day}`;
 }
 
-export function daysSinceDelivery(deliveredAt, today = new Date()) {
-  const deliveryDate = dateOnly(deliveredAt);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return 0;
-  const [year, month, day] = deliveryDate.split('-').map(Number);
-  const start = Date.UTC(year, month - 1, day);
-  const end = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-  return Math.max(0, Math.floor((end - start) / 86_400_000));
-}
-
 export function calculateBalances({ clients = [], orders = [], lines = [], payments = [] }) {
-  const orderBalances = orders.map((order) => {
-    const orderLines = lines.filter((line) => line.pedido_id === order.id);
-    const orderPayments = payments.filter((payment) => payment.pedido_id === order.id);
+  const activeOrders = orders.filter(isActive);
+  const activeClients = clients.filter(isActive);
+  const orderBalances = activeOrders.map((order) => {
+    const orderLines = lines.filter((line) => line.pedido_id === order.id && isActive(line));
+    const orderPayments = payments.filter((payment) => payment.pedido_id === order.id && isActive(payment));
+    const lineBalances = aplicarPagos(orderLines, orderPayments);
     return {
       ...order,
       ...calculateTotals(orderLines, orderPayments),
-      lineas: allocatePaymentsToLines(orderLines, orderPayments),
+      lineas: lineBalances,
     };
   });
-  const clientBalances = clients.map((client) => {
+  const clientBalances = activeClients.map((client) => {
     const clientOrders = orderBalances.filter((order) => order.cliente_id === client.id);
     const totals = clientOrders.reduce((sum, order) => ({
       total_vigente: sum.total_vigente + order.total_vigente,
@@ -103,7 +209,9 @@ export function calculateBalances({ clients = [], orders = [], lines = [], payme
       cobros_netos: sum.cobros_netos + order.cobros_netos,
     }), { total_vigente: 0, total_entregado: 0, cobros_netos: 0 });
     const deliveredLines = clientOrders.flatMap((order) =>
-      order.lineas.map((line) => ({ ...line, pedido_id: order.id })),
+      order.lineas
+        .filter((line) => line.estado === 'entregado')
+        .map((line) => ({ ...line, pedido_id: order.id })),
     );
     return {
       ...client,
@@ -120,33 +228,6 @@ export function calculateBalances({ clients = [], orders = [], lines = [], payme
 }
 
 export function calculateLineRefundAmount(lines, payments, lineId) {
-  const activeLines = lines
-    .filter((line) => line.estado !== 'cancelado')
-    .slice()
-    .sort((left, right) =>
-      left.fecha_entrega.localeCompare(right.fecha_entrega)
-      || left.id.localeCompare(right.id),
-    );
-  const directByLine = new Map();
-  let orderPaymentNet = 0;
-  for (const payment of payments) {
-    const net = payment.tipo === 'devolucion' ? -payment.monto : payment.monto;
-    if (payment.linea_id) {
-      directByLine.set(payment.linea_id, (directByLine.get(payment.linea_id) ?? 0) + net);
-    } else {
-      orderPaymentNet += net;
-    }
-  }
-
-  const targetDirect = Math.max(0, directByLine.get(lineId) ?? 0);
-  let remaining = Math.max(0, orderPaymentNet);
-  let targetShared = 0;
-  for (const line of activeLines) {
-    const direct = Math.max(0, directByLine.get(line.id) ?? 0);
-    const available = Math.max(0, line.precio_acordado - direct);
-    const applied = Math.min(available, remaining);
-    if (line.id === lineId) targetShared = applied;
-    remaining -= applied;
-  }
-  return targetDirect + targetShared;
+  return aplicarPagos(lines, payments)
+    .find((line) => line.id === lineId)?.pagos_aplicados ?? 0;
 }

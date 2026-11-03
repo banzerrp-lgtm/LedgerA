@@ -3,6 +3,13 @@ function dateValue(value) {
   return value.slice(0, 10);
 }
 
+export function completionDate(deliveryDate, lastPaymentDate) {
+  return [dateValue(deliveryDate), dateValue(lastPaymentDate)]
+    .filter(Boolean)
+    .sort()
+    .pop() ?? '';
+}
+
 export function filterCompletedHistory(history, {
   query = '',
   clientId = '',
